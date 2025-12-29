@@ -61,7 +61,7 @@ playlist_dicts=()
 mapfile playlist_dicts < <(jq -c '.playlists[]' "$in_file")
 
 for playlist_json in "${playlist_dicts[@]}"; do
-    name=$(jq -r .name <<<$playlist_json | sed 's:/:%2F:g')
+    name=$(jq -r .name <<<$playlist_json | sed 's:/:%2F:g' | sed 's/:/%3A/g')
     out_fn="${out_dir}/${name}.jspf"
     ii=1
     while [[ -e $out_fn ]]; do
