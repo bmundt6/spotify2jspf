@@ -55,3 +55,39 @@ if ! mkdir -p $out_dir; then
     >&2 echo "ERROR: Failed to create output directory $out_dir."
     exit 1
 fi
+
+playlist_dicts=()
+
+mapfile playlist_dicts < <(jq -c '.playlists[]' "$in_file")
+
+for playlist_json in "${playlist_dicts[@]}"; do
+    name=$(jq -r .name <<<$playlist_json)
+    out_fn="${out_dir}/${name}.jspf"
+    ii=1
+    while [[ -e $out_fn ]]; do
+        out_fn="${out_dir}/${name} ($ii).jspf"
+        ii=$((ii+1))
+    done
+    >"$out_fn" jq '{
+        "playlist" : {
+            "extension" : {
+                "https://musicbrainz.org/doc/jspf#playlist" : {
+                    "last_modified_at": .lastModifiedDate,
+                }
+            },
+            "date" : .lastModifiedDate,
+            "title" : .name,
+            "track" : [ .items[] | 
+                {
+                    "title" : .track.trackName,
+                    "creator" : .track.artistName,
+                    "extension" : {
+                    "https://musicbrainz.org/doc/jspf#track" : {
+                        "added_at" : .addedDate,
+                    }
+                    },
+                }
+            ],
+        }
+    }' <<<$playlist_json
+done
