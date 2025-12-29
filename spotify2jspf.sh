@@ -73,6 +73,7 @@ for playlist_json in "${playlist_dicts[@]}"; do
             "extension" : {
                 "https://musicbrainz.org/doc/jspf#playlist" : {
                     "last_modified_at": .lastModifiedDate,
+                    "public": false,
                 }
             },
             "date" : .lastModifiedDate,
