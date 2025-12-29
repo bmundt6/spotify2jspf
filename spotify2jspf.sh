@@ -81,6 +81,8 @@ for playlist_json in "${playlist_dicts[@]}"; do
             "track" : [ .items[] | 
                 {
                     "title" : .track.trackName,
+                    #FIXME: need to resolve the spotify track ID to a corresponding MusicBrainz recording ID
+                    "identifier": .track.trackUri,
                     "creator" : .track.artistName,
                     "extension" : {
                     "https://musicbrainz.org/doc/jspf#track" : {
