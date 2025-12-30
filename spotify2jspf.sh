@@ -4,17 +4,23 @@ _usage() {
 cat <<USAGE
 spotify2jspf.sh - convert spotify export format to JSPF
 usage:
-  spotify2jspf.sh [-h] [IN] [OUT]
+  spotify2jspf.sh [-h|-v] [IN] [OUT]
 options:
-  -h|--help  display this message and exit
+  -v|--verbose  produce additional debugging output
+  -h|--help     display this message and exit
 arguments:
-  IN         path to the Playlist1.json file to parse
-             (default: ./Playlist1.json)
-  OUT        path to a directory into which resulting .jspf files will be dumped
-             (default: ./out)
+  IN            path to the Playlist1.json file to parse
+                (default: ./Playlist1.json)
+  OUT           path to a directory into which resulting .jspf files will be dumped
+                (default: ./out)
 USAGE
 }
 
+_percent_encode_unsafe_chars() {
+    sed 's:/:%2F:g' | sed 's/:/%3A/g'
+}
+
+verbose=""
 in_file=""
 out_dir=""
 
@@ -23,6 +29,12 @@ while (($#)); do
         (-h|--help)
             _usage
             exit
+            ;;
+        (-v|--verbose)
+            verbose=1
+            ;;
+        (+v|--noverbose)
+            verbose=""
             ;;
         (-*)
             >&2 echo "ERROR: Unrecognized option: $1"
@@ -40,6 +52,14 @@ while (($#)); do
     esac
     shift
 done
+
+if [[ $verbose ]]; then
+    _msg () {
+        echo "$*"
+    }
+else
+    _msg () { :; }
+fi
 
 if [[ -z $in_file ]]; then
     in_file="./Playlist1.json"
@@ -61,13 +81,37 @@ playlist_dicts=()
 mapfile playlist_dicts < <(jq -c '.playlists[]' "$in_file")
 
 for playlist_json in "${playlist_dicts[@]}"; do
-    name=$(jq -r .name <<<$playlist_json | sed 's:/:%2F:g' | sed 's/:/%3A/g')
+    name_raw=$(jq -r .name <<<$playlist_json)
+    name=$(_percent_encode_unsafe_chars <<<$name_raw)
     out_fn="${out_dir}/${name}.jspf"
     ii=1
     while [[ -e $out_fn ]]; do
         out_fn="${out_dir}/${name} ($ii).jspf"
         ii=$((ii+1))
     done
+    _msg "Processing playlist: $name_raw (file: $out_fn)"
+    track_dicts=()
+    mapfile track_dicts < <(jq -c '.items[]' <<<$playlist_json)
+    mapped_tracks=()
+    mapping_failures=()
+    _msg "  Attempting to map ${#track_dicts[@]} tracks..."
+    for track_json in "${track_dicts[@]}"; do
+        #TODO: map each Spotify track ID to an ISRC code, then to a MusicBrainz recording ID
+        # (this is the "identifier" field)
+        title=$(jq -r .track.trackName <<<$track_json)
+        mapped_tracks+=("$(jq -c --arg title "$title" '{
+            "title": $title,
+            "identifier": .track.trackUri,
+            "creator": .track.artistName,
+            "extension": {
+                "https://musicbrainz.org/doc/jspf#track": {
+                    "added_at": .addedDate,
+                },
+            },
+        }' <<<$track_json)")
+        _msg "    SUCCESS: $title"
+    done
+    _msg "  ...done. Mapped ${#mapped_tracks[@]} of ${#track_dicts[@]} tracks."
     >"$out_fn" jq '{
         "playlist" : {
             "extension" : {
@@ -78,19 +122,7 @@ for playlist_json in "${playlist_dicts[@]}"; do
             },
             "date" : .lastModifiedDate,
             "title" : .name,
-            "track" : [ .items[] | 
-                {
-                    "title" : .track.trackName,
-                    #FIXME: need to resolve the spotify track ID to a corresponding MusicBrainz recording ID
-                    "identifier": .track.trackUri,
-                    "creator" : .track.artistName,
-                    "extension" : {
-                    "https://musicbrainz.org/doc/jspf#track" : {
-                        "added_at" : .addedDate,
-                    }
-                    },
-                }
-            ],
+            "track" : $ARGS.positional,
         }
-    }' <<<$playlist_json
+    }' --jsonargs "${mapped_tracks[@]}" <<<$playlist_json
 done
