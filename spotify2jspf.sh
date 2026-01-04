@@ -127,14 +127,14 @@ _musicbrainz_query() { # make a request to the MusicBrainz API
     echo "$res"
 }
 
-_mb_fetch_recording_for_url() { # return MBID for the given spotify URL, if any
+_mb_fetch_recording_for_url() { # return MusicBrainz recording for the given spotify URL, if any
     spotify_track_url=$1
-    query_opts=(url "resource=${spotify_track_url}" "inc=recording-rels")
+    query_opts=(url "resource=${spotify_track_url}" "inc=recording-rels+artist-credits")
     res=$(_musicbrainz_query "${query_opts[@]}") || return
     if (($(jq '.relations | length' <<<$res) >= 1)); then
         _dbg "DEBUG Got relations"
         # if we get multiple results, we'll assume the first one is desired
-        jq -r '.relations[0].recording.id' <<<$res
+        jq -c '.relations[0].recording' <<<$res
     elif ((${HARD_FAIL:-1})); then
         mapfile -d '' curl_cmd < <(_mb_query_cmd "${query_opts[@]}")
         return $(_failmsg "      Zero matching MusicBrainz recordings for $spotify_track_url. Request='${curl_cmd[*]}'; Response='$res'")
@@ -143,32 +143,37 @@ _mb_fetch_recording_for_url() { # return MBID for the given spotify URL, if any
     fi
 }
 
-_mb_fetch_recording_for_artist_and_title() { # return MBID for the given artist/title, if any
+_mb_fetch_recording_for_artist_and_title() { # return MusicBrainz recording for the given artist/title, if any
                                              # there may be multiples, in which case we give the first
     artist_name=$1
     song_title=$2
-    query_opts=(recording "query=recording:\"$song_title\" AND artist:\"$artist_name\"")
+    query_opts=(recording "query=recording:\"$song_title\" AND artist:\"$artist_name\"" "inc=artist-credits")
     res=$(_musicbrainz_query "${query_opts[@]}") || return
     if (($(jq '.count' <<<$res) >= 1)); then
         # search results are fuzzy, so we need to narrow down to the single one with an exact match, if any
-        if mbid=$(jq -r \
+        if mapped_recording_json=$(jq -c \
             --arg title "$song_title" \
             --arg artist_name "$artist_name" \
-            '[.recordings[] | select(."title" == $title) | select(."artist-credit"[].name == $artist_name) | .id][0] | select(.)' <<<$res
+            '[.recordings[] | select(."title" == $title) | select(."artist-credit"[0].name == $artist_name)][0] | select(.)' <<<$res
         ); then
-            if [[ $mbid ]]; then
-                echo "$mbid"
+            if [[ $mapped_recording_json ]]; then
+                _dbg "DEBUG: Returning exact match recording json"
+                echo "$mapped_recording_json"
                 return
             fi
         else
             return 1
         fi
-        # if we got inexact matches, then warn but return the first one anyway
-        jq -r '.recordings[0].id | select(.)' <<<$res || return
-        _msg "      WARNING: Inexact match for $artist_name - $song_title"
+        # if we got inexact matches, we'll warn but return the first one anyway
+        # this happens because:
+        # - sometimes artist names are stylized differently across platforms (dift. case/punctuation)
+        # - MusicBrainz only allows querying based on sub-strings of song titles;
+        #   so e.g. recording:"Foobar" matches both "Foobar" and "Foobar (club mix)"
+        _dbg "DEBUG: Returning first match recording json"
+        jq -c '.recordings[0] | select(.)' <<<$res || return
+    elif ((${HARD_FAIL:-1})); then
         #TODO: try even harder
         # e.g. do a secondary fuzzy search to match Foo - Bartist remix as well as Foo (Bartist Remix)
-    elif ((${HARD_FAIL:-1})); then
         mapfile -d '' curl_cmd < <(_mb_query_cmd "${query_opts[@]}")
         return $(_failmsg "      Zero matching MusicBrainz recordings for $artist_name - $song_title. Request='${curl_cmd[*]}; Response='$res'")
     else
@@ -184,6 +189,12 @@ _map_track() { # return MBID for the given artist/title/spotify URL, if any
     # if we got nothing for this URL, try searching by artist+title
     _mb_fetch_recording_for_artist_and_title "$artist_name" "$song_title"
 }
+
+# _mb_fetch_recording_info_for_mbid() { # get artist credits and song title for the given MBID
+#     mbid=$1
+#     query_opts=("recording/${mbid}" "inc=artist-credits")
+#     _musicbrainz_query "${query_opts[@]}"
+# }
 
 for playlist_json in "${playlist_dicts[@]}"; do
     name_raw=$(jq -r .name <<<$playlist_json)
@@ -210,8 +221,17 @@ for playlist_json in "${playlist_dicts[@]}"; do
         spotify_track_id=${spotify_track_uri##*:}
         spotify_track_url="https://open.spotify.com/track/${spotify_track_id}"
         _msg "    MAPPING: $creator - $title (URL: $spotify_track_url)..."
-        if mapped_track_mbid=$(_map_track "$creator" "$title" "$spotify_track_url"); then
+        if mapped_recording_json=$(_map_track "$creator" "$title" "$spotify_track_url"); then
+            _dbg "DEBUG: Mapped recording json=${mapped_recording_json}"
+            mapped_track_mbid=$(jq -r '.id' <<<$mapped_recording_json)
+            actual_artist_name=$(jq -r '."artist-credit"[0].name' <<<$mapped_recording_json)
+            actual_song_title=$(jq -r '.title' <<<$mapped_recording_json)
             _dbg "DEBUG: Found MBID=$mapped_track_mbid"
+            if [[ $actual_artist_name != $creator ]] || [[ $actual_song_title != $title ]]; then
+                _msg "      WARNING: Inexact match for '$creator - $title' (found: '$actual_artist_name - $actual_song_title')"
+                title=$actual_song_title
+                creator=$actual_artist_name
+            fi
             musicbrainz_recording_url="https://musicbrainz.org/recording/${mapped_track_mbid}"
             mapped_tracks+=("$(jq -nc \
                 --arg title "$title" \
