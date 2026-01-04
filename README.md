@@ -5,6 +5,7 @@ This repo contains a script (`spotify2jspf.sh`) for converting playlists dumped 
 ## Prerequisites
 
 - [`jq`](https://jqlang.org/) must be installed and available on your system path
+- [cURL](https://curl.se/) >= 7.18.0 must be installed
 - You must have a spotify playlist dump (`Playlist1.json` file)
 
 ## Example Usage
@@ -16,4 +17,4 @@ spotify2jspf.sh "/path/to/Spotify Account Data/Playlist1.json" "/path/to/jspf_ou
 ## Limitations
 
 - All playlists are assumed to be private - you will need to make them public manually if desired.
-- FIXME: `Error: JSPF playlist track 0 must contain a identifier field having a fully qualified URI to a recording_mbid. (e.g. https://musicbrainz.org/recording/8f3471b5-7e6a-48da-86a9-c1c07a0f47ae)`
+- [MusicBrainz API rate limiting](https://musicbrainz.org/doc/MusicBrainz_API/Rate_Limiting) may apply, causing slowdowns or even total failures depending on the size of your playlists and the frequency of your computer's outgoing requests.
