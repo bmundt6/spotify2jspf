@@ -154,7 +154,7 @@ _mb_fetch_recording_for_artist_and_title() { # return MBID for the given artist/
         if mbid=$(jq -r \
             --arg title "$song_title" \
             --arg artist_name "$artist_name" \
-            '[.recordings[] | select(."title" == $title) | select(."artist-credit"[].name == $artist_name) | .id][0]' <<<$res
+            '[.recordings[] | select(."title" == $title) | select(."artist-credit"[].name == $artist_name) | .id][0] | select(.)' <<<$res
         ); then
             if [[ $mbid ]]; then
                 echo "$mbid"
@@ -164,7 +164,7 @@ _mb_fetch_recording_for_artist_and_title() { # return MBID for the given artist/
             return 1
         fi
         # if we got inexact matches, then warn but return the first one anyway
-        jq -r '.recordings[0].id' <<<$res || return
+        jq -r '.recordings[0].id | select(.)' <<<$res || return
         _msg "      WARNING: Inexact match for $artist_name - $song_title"
         #TODO: try even harder
         # e.g. do a secondary fuzzy search to match Foo - Bartist remix as well as Foo (Bartist Remix)
@@ -211,6 +211,7 @@ for playlist_json in "${playlist_dicts[@]}"; do
         spotify_track_url="https://open.spotify.com/track/${spotify_track_id}"
         _msg "    MAPPING: $creator - $title (URL: $spotify_track_url)..."
         if mapped_track_mbid=$(_map_track "$creator" "$title" "$spotify_track_url"); then
+            _dbg "DEBUG: Found MBID=$mapped_track_mbid"
             musicbrainz_recording_url="https://musicbrainz.org/recording/${mapped_track_mbid}"
             mapped_tracks+=("$(jq -nc \
                 --arg title "$title" \
