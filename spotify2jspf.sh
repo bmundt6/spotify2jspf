@@ -102,10 +102,15 @@ if ! [[ -f $in_file ]]; then
     >&2 echo "ERROR: Input file $in_file does not exist."
     exit 1
 fi
-if ! mkdir -p $out_dir; then
-    >&2 echo "ERROR: Failed to create output directory $out_dir."
-    exit 1
-fi
+
+mapped_out_dir="${out_dir}/success"
+unmapped_out_dir="${out_dir}/failure"
+for required_dir in "$out_dir" "$mapped_out_dir" "$unmapped_out_dir"; do
+    if ! mkdir -p $required_dir; then
+        >&2 echo "ERROR: Failed to create required directory $required_dir."
+        exit 1
+    fi
+done
 
 playlist_dicts=()
 
@@ -224,17 +229,19 @@ _map_track() { # return MBID for the given artist/title/spotify URL, if any
 for playlist_json in "${playlist_dicts[@]}"; do
     name_raw=$(jq -r .name <<<$playlist_json)
     name=$(_percent_encode_unsafe_chars <<<$name_raw)
-    out_fn="${out_dir}/${name}.jspf"
+    mapped_out_fn="${mapped_out_dir}/${name}.jspf"
+    unmapped_out_fn="${unmapped_out_dir}/${name}.json"
     ii=1
-    while [[ -e $out_fn ]]; do
-        out_fn="${out_dir}/${name} ($ii).jspf"
+    while [[ -e $mapped_out_fn ]] || [[ -e $unmapped_out_fn ]]; do
+        mapped_out_fn="${mapped_out_dir}/${name} ($ii).jspf"
+        unmapped_out_fn="${unmapped_out_dir}/${name} ($ii).json"
         ii=$((ii+1))
     done
-    _msg "Processing playlist: $name_raw (file: $out_fn)"
+    _msg "Processing playlist: $name_raw (file: $mapped_out_fn)"
     track_dicts=()
     mapfile track_dicts < <(jq -c '.items[]' <<<$playlist_json)
     mapped_tracks=()
-    mapping_failures=()
+    unmapped_tracks=()
     _msg "  Attempting to map ${#track_dicts[@]} tracks..."
     for track_json in "${track_dicts[@]}"; do
         # map each Spotify track ID to a MusicBrainz recording ID
@@ -275,11 +282,12 @@ for playlist_json in "${playlist_dicts[@]}"; do
             }' <<<$track_json)")
             _msg "      SUCCESS"
         else
+            unmapped_tracks+=("$track_json")
             _msg "      FAILURE"
         fi
     done
-    _msg "  ...done. Mapped ${#mapped_tracks[@]} of ${#track_dicts[@]} tracks."
-    >"$out_fn" jq '{
+    _msg "  ...done. Mapped ${#mapped_tracks[@]} of ${#track_dicts[@]} track(s)."
+    >"$mapped_out_fn" jq '{
         "playlist" : {
             "extension" : {
                 "https://musicbrainz.org/doc/jspf#playlist" : {
@@ -292,4 +300,8 @@ for playlist_json in "${playlist_dicts[@]}"; do
             "track" : $ARGS.positional,
         }
     }' --jsonargs "${mapped_tracks[@]}" <<<$playlist_json
+    if ((${#unmapped_tracks[@]})); then
+        _msg "  Dumping ${#unmapped_tracks[@]} unmapped track(s) to ${unmapped_out_fn}."
+        >"$unmapped_out_fn" jq '.items = $ARGS.positional' --jsonargs "${unmapped_tracks[@]}" <<<$playlist_json
+    fi
 done
