@@ -133,12 +133,21 @@ _musicbrainz_query() { # make a request to the MusicBrainz API
                        # first argument is the top-level API request, like /artist /recording etc.
                        # following arguments are query string params
     mapfile -d '' curl_cmd < <(_mb_query_cmd "$@")
+    sleep_time=1
     for ii in {1..5}; do
         # up to 5 tries in case we get some network issues
         _dbg "DEBUG Trying command $ii of 5 attempts: ${curl_cmd[*]}"
         res=$("${curl_cmd[@]}")
         curl_rc=$?
-        ((curl_rc)) || break
+        ((curl_rc)) && continue
+        if error=$(jq -r .error <<<$res) && [[ $error =~ "exceeding the allowable rate limit" ]]; then
+            # be a good citizen - back off if we're going too fast
+            _dbg "DEBUG Sleeping $sleep_time seconds for rate limit"
+            sleep "$sleep_time"
+            sleep_time=$((sleep_time * 2))
+            continue
+        fi
+        break
     done
     ((curl_rc)) && return $(_failmsg "      MusicBrainz API query failed. Request='${curl_cmd[*]}'; Response (rc=$curl_rc)='$res'")
     _dbg "DEBUG Response: $res"

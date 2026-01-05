@@ -11,10 +11,10 @@ This repo contains a script (`spotify2jspf.sh`) for converting playlists dumped 
 ## Example Usage
 
 ```bash
-spotify2jspf.sh "/path/to/Spotify Account Data/Playlist1.json" "/path/to/jspf_out"
+spotify2jspf.sh -v "/path/to/Spotify Account Data/Playlist1.json" "/path/to/jspf_out" |& tee conversion.log
 ```
 
 ## Limitations
 
 - All playlists are assumed to be private - you will need to make them public manually if desired.
-- [MusicBrainz API rate limiting](https://musicbrainz.org/doc/MusicBrainz_API/Rate_Limiting) may apply, causing slowdowns or even total failures depending on the size of your playlists and the frequency of your computer's outgoing requests.
+- [MusicBrainz API rate limiting](https://musicbrainz.org/doc/MusicBrainz_API/Rate_Limiting) limits your IP address to 1 request per second, so the absolute top speed for this conversion process is one track per second. Exercise patience.
