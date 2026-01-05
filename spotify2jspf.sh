@@ -22,6 +22,19 @@ _percent_encode_unsafe_chars() { # sanitize stuff for the filesystem
     sed 's:/:%2F:g' | sed 's/:/%3A/g'
 }
 
+# _escape_quotes() { # turn " into \"
+#     sed 's/"/\\"/g'
+# }
+
+_escape_lucene_special_chars() { # escape all special characters involved in Lucene search syntax
+                                 # https://lucene.apache.org/core/4_3_0/queryparser/org/apache/lucene/queryparser/classic/package-summary.html#Escaping_Special_Characters
+    sed 's/\([][+&|!(){}^"~*?:\/-]\)/\\\1/g'
+}
+
+_remove_lucene_special_chars() { # get rid of special chars altogether
+    sed 's/\([][+&|!(){}^"~*?:\/-]\)//g'
+}
+
 unset HARD_FAIL
 verbose=""
 in_file=""
@@ -147,38 +160,50 @@ _mb_fetch_recording_for_artist_and_title() { # return MusicBrainz recording for 
                                              # there may be multiples, in which case we give the first
     artist_name=$1
     song_title=$2
-    query_opts=(recording "query=recording:\"$song_title\" AND artist:\"$artist_name\"" "inc=artist-credits")
-    res=$(_musicbrainz_query "${query_opts[@]}") || return
-    if (($(jq '.count' <<<$res) >= 1)); then
-        # search results are fuzzy, so we need to narrow down to the single one with an exact match, if any
-        if mapped_recording_json=$(jq -c \
-            --arg title "$song_title" \
-            --arg artist_name "$artist_name" \
-            '[.recordings[] | select(."title" == $title) | select(."artist-credit"[0].name == $artist_name)][0] | select(.)' <<<$res
-        ); then
-            if [[ $mapped_recording_json ]]; then
-                _dbg "DEBUG: Returning exact match recording json"
-                echo "$mapped_recording_json"
-                return
+    query_opts=()
+    transforms=(
+        _escape_lucene_special_chars
+        _remove_lucene_special_chars
+    )
+    # apply each available transform to the queries until we get something usable
+    # 1. nothing (raw string equal to the actual artist+title, with only special chars escaped)
+    # 2. remove special chars rather than escaping
+    # TODO: try even harder, e.g. do a fuzzy search to get matches within some edit distance
+    for transform in "${transforms[@]}"; do
+        artist_query=$("$transform" <<<$artist_name)
+        recording_query=$("$transform" <<<$song_title)
+        query_opts=(recording "query=recording:\"$recording_query\" AND artist:\"$artist_query\"" "inc=artist-credits")
+        res=$(_musicbrainz_query "${query_opts[@]}") || return
+        if (($(jq '.count' <<<$res) >= 1)); then
+            # search results are fuzzy, so we need to narrow down to the single one with an exact match, if any
+            if mapped_recording_json=$(jq -c \
+                --arg title "$song_title" \
+                --arg artist_name "$artist_name" \
+                '[.recordings[] | select(."title" == $title) | select(."artist-credit"[0].name == $artist_name)][0] | select(.)' <<<$res
+            ); then
+                if [[ $mapped_recording_json ]]; then
+                    _dbg "DEBUG: Returning exact match recording json"
+                    echo "$mapped_recording_json"
+                    return
+                fi
+            else
+                return 1
             fi
-        else
-            return 1
+            # if we got inexact matches, we'll warn but return the first one anyway
+            # this happens because:
+            # - sometimes artist names are stylized differently across platforms (dift. case/punctuation)
+            # - MusicBrainz only allows querying based on sub-strings of song titles;
+            #   so e.g. recording:"Foobar" matches both "Foobar" and "Foobar (club mix)"
+            _dbg "DEBUG: Returning first match recording json"
+            jq -c '.recordings[0] | select(.)' <<<$res || return
+            return
         fi
-        # if we got inexact matches, we'll warn but return the first one anyway
-        # this happens because:
-        # - sometimes artist names are stylized differently across platforms (dift. case/punctuation)
-        # - MusicBrainz only allows querying based on sub-strings of song titles;
-        #   so e.g. recording:"Foobar" matches both "Foobar" and "Foobar (club mix)"
-        _dbg "DEBUG: Returning first match recording json"
-        jq -c '.recordings[0] | select(.)' <<<$res || return
-    elif ((${HARD_FAIL:-1})); then
-        #TODO: try even harder
-        # e.g. do a secondary fuzzy search to match Foo - Bartist remix as well as Foo (Bartist Remix)
+    done
+    if ((${HARD_FAIL:-1})); then
         mapfile -d '' curl_cmd < <(_mb_query_cmd "${query_opts[@]}")
-        return $(_failmsg "      Zero matching MusicBrainz recordings for $artist_name - $song_title. Request='${curl_cmd[*]}; Response='$res'")
-    else
-        return 1
+        return $(_failmsg "      Zero matching MusicBrainz recordings for $artist_name - $song_title. Request='${curl_cmd[*]}'; Response='$res'")
     fi
+    return 1
 }
 
 _map_track() { # return MBID for the given artist/title/spotify URL, if any
